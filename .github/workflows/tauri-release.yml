@@ -1,4 +1,7 @@
 name: "Release Multiplatform"
+permissions:
+  contents: write
+
 on:
   push:
     tags:
@@ -24,13 +27,20 @@ jobs:
         with:
           node-version: 20
 
-      - name: install Rust stable
+      - name: install Rust stable (default)
+        if: matrix.platform != 'macos-latest'
         uses: dtolnay/rust-toolchain@stable
+
+      - name: install Rust stable (macOS target)
+        if: matrix.platform == 'macos-latest'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
 
       - name: install frontend dependencies
         run: npm install && npm --prefix frontend install
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
