@@ -64,10 +64,7 @@ npm run build
 src-tauri/target/release/bundle/
 ```
 
-说明：
-
-- Windows 本地默认生成 Windows 安装包
-- macOS Apple Silicon 安装包通过 GitHub Actions 发布流程生成
+如果只是使用应用，不需要自己构建，直接在 GitHub Release 页面下载对应平台安装包即可。
 
 ## 打包与发布
 
@@ -81,7 +78,7 @@ https://github.com/Eric-Ma-Q/skillsLocalManager.git
 
 ### Release 流程
 
-本项目采用 `v*` tag 自动发布：
+对维护者来说，本项目采用 `v*` tag 自动发布：
 
 1. 更新版本号
 2. 提交到 `main`
