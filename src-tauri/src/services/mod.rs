@@ -1,0 +1,11 @@
+pub mod agent_detector;
+pub mod claude_bootstrap;
+pub mod clawhub;
+pub mod cover_history;
+pub mod git;
+pub mod md_parser;
+pub mod scanner;
+pub mod symlink;
+pub mod sync;
+pub mod translator;
+pub mod tree_hash;

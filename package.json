@@ -1,0 +1,22 @@
+{
+  "name": "skills-local-manager-root",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
+    "@tauri-apps/cli-win32-x64-msvc": "^2.10.1"
+  },
+  "optionalDependencies": {
+    "@tauri-apps/cli-darwin-arm64": "^2.10.1",
+    "@tauri-apps/cli-darwin-x64": "^2.10.1",
+    "@tauri-apps/cli-linux-x64-gnu": "^2.10.1",
+    "@tauri-apps/cli-win32-x64-msvc": "^2.10.1"
+  }
+}
