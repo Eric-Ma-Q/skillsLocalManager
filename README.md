@@ -66,41 +66,18 @@ src-tauri/target/release/bundle/
 
 如果只是使用应用，不需要自己构建，直接在 GitHub Release 页面下载对应平台安装包即可。
 
-## 打包与发布
+## 下载与安装
 
-### GitHub 仓库
-
-远端仓库地址：
+项目发布页：
 
 ```text
-https://github.com/Eric-Ma-Q/skillsLocalManager.git
+https://github.com/Eric-Ma-Q/skillsLocalManager/releases
 ```
 
-### Release 流程
+当前提供的安装包类型：
 
-对维护者来说，本项目采用 `v*` tag 自动发布：
-
-1. 更新版本号
-2. 提交到 `main`
-3. 创建 tag，例如 `v0.1.2`
-4. 推送分支与 tag
-5. GitHub Actions 自动构建 Windows x64 与 macOS Apple Silicon 安装包
-6. 自动创建公开 Release，并把安装包作为附件上传
-
-### GitHub Actions 说明
-
-发布工作流位于：
-
-```text
-.github/workflows/tauri-release.yml
-```
-
-当前发布策略：
-
-- 仅构建 `windows-latest`
-- 仅构建 `macos-latest`
-- macOS 目标架构显式指定为 `aarch64-apple-darwin`
-- Release 默认为公开发布，不生成 draft，不标记 prerelease
+- Windows：`.msi` 或 `-setup.exe`
+- macOS Apple Silicon：`.dmg`
 
 ## 可选配置
 
