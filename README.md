@@ -82,7 +82,7 @@ https://github.com/Eric-Ma-Q/skillsLocalManager.git
 
 1. 更新版本号
 2. 提交到 `main`
-3. 创建 tag，例如 `v0.1.1`
+3. 创建 tag，例如 `v0.1.2`
 4. 推送分支与 tag
 5. GitHub Actions 自动构建 Windows x64 与 macOS Apple Silicon 安装包
 6. 自动创建公开 Release，并把安装包作为附件上传

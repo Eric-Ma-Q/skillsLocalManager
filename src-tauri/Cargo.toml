@@ -1,6 +1,6 @@
 [package]
 name = "skills-local-manager"
-version = "0.1.1"
+version = "0.1.2"
 description = "skillsLocalManager - Tauri Desktop App"
 edition = "2021"
 
