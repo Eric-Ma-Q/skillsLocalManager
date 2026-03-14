@@ -3,15 +3,16 @@
 use serde::Serialize;
 use skills_local_manager_lib::models::{
     Agent, AgentType, ApplySyncResponse, ClaudeBootstrapCatalog, ClaudeBootstrapRequest,
-    ClaudeBootstrapResult, CoverSkillResponse, RollbackSkillCoverResponse,
-    RollbackSyncResponse, Skill, SkillCoverHistoryEntry, SyncMappingUpsertResponse,
-    SyncPreviewResponse,
+    ClaudeBootstrapResult, CoverSkillResponse, ManagedSkillActionResponse,
+    ManagedSkillUpdateRequest, RegistrySkillDetail, RegistrySkillsRequest, RegistrySkillsResponse,
+    RollbackSkillCoverResponse, RollbackSyncResponse, Skill, SkillCoverHistoryEntry,
+    SyncMappingUpsertResponse, SyncPreviewResponse,
 };
 use skills_local_manager_lib::services::clawhub::ClawHubSkill;
 use skills_local_manager_lib::services::translator::TranslatorConfig;
 use skills_local_manager_lib::services::{
-    agent_detector, claude_bootstrap, clawhub, cover_history, scanner, symlink, sync,
-    translator,
+    agent_detector, claude_bootstrap, clawhub, cover_history, managed_skills, scanner, symlink,
+    sync, translator,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -31,6 +32,8 @@ async fn get_skills() -> Result<Vec<Skill>, String> {
 #[tauri::command]
 async fn get_skills_v2() -> Result<Vec<Skill>, String> {
     let mut skills = scanner::scan_all_v2()?;
+    managed_skills::attach_origin_metadata(&mut skills);
+    managed_skills::hydrate_remote_updates(&mut skills).await;
     sync::attach_sync_group_ids(&mut skills)?;
     Ok(skills)
 }
@@ -75,9 +78,17 @@ async fn toggle_skill(
 }
 
 #[tauri::command]
-async fn browse_registry() -> Result<Vec<ClawHubSkill>, String> {
+async fn get_registry_skills(
+    request: RegistrySkillsRequest,
+) -> Result<RegistrySkillsResponse<ClawHubSkill>, String> {
     let service = clawhub::ClawHubService::new();
-    service.fetch_skills().await
+    service.fetch_skills(request).await
+}
+
+#[tauri::command]
+async fn get_registry_skill_detail(slug: String) -> Result<RegistrySkillDetail, String> {
+    let service = clawhub::ClawHubService::new();
+    service.fetch_skill_detail(&slug).await
 }
 
 #[tauri::command]
@@ -93,9 +104,45 @@ async fn install_claude_bootstrap_skills(
 }
 
 #[tauri::command]
+async fn install_registry_skill(
+    request: skills_local_manager_lib::models::RegistrySkillInstallRequest,
+) -> Result<ManagedSkillActionResponse, String> {
+    managed_skills::install_registry_skill(request).await
+}
+
+#[tauri::command]
+async fn update_managed_skill(
+    request: ManagedSkillUpdateRequest,
+) -> Result<ManagedSkillActionResponse, String> {
+    managed_skills::update_managed_skill(request).await
+}
+
+#[tauri::command]
+async fn browse_registry() -> Result<Vec<ClawHubSkill>, String> {
+    let service = clawhub::ClawHubService::new();
+    Ok(service
+        .fetch_skills(RegistrySkillsRequest {
+            query: None,
+            sort: None,
+            cursor: None,
+            limit: Some(50),
+        })
+        .await?
+        .items)
+}
+
+#[tauri::command]
 async fn search_registry(query: String) -> Result<Vec<ClawHubSkill>, String> {
     let service = clawhub::ClawHubService::new();
-    service.search_skills(&query).await
+    Ok(service
+        .fetch_skills(RegistrySkillsRequest {
+            query: Some(query),
+            sort: None,
+            cursor: None,
+            limit: Some(50),
+        })
+        .await?
+        .items)
 }
 
 #[tauri::command]
@@ -278,8 +325,8 @@ async fn open_local_path(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     let mut command = {
-        let mut cmd = Command::new("explorer");
-        cmd.arg(&target);
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg("start").arg("").arg(&target);
         cmd
     };
 
@@ -338,9 +385,13 @@ fn main() {
             get_skills,
             get_skills_v2,
             toggle_skill,
+            get_registry_skills,
+            get_registry_skill_detail,
             browse_registry,
             get_claude_bootstrap_catalog,
             install_claude_bootstrap_skills,
+            install_registry_skill,
+            update_managed_skill,
             search_registry,
             upsert_sync_mapping,
             preview_sync,
@@ -362,3 +413,4 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+

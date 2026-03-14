@@ -1,55 +1,87 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
-import { Hammer, Activity, Grid2X2, Globe, Settings, Search, Download, Star } from "lucide-react";
+import { Wrench, Activity, Grid2X2, Globe, Settings, Search, Download, Star } from "lucide-react";
 import { SkillCard } from "./components/SkillCard";
 import { ClaudeInitBanner } from "./components/ClaudeInitBanner";
 import { SkillDetail } from "./components/SkillDetail";
+import { RegistrySkillDetailPanel } from "./components/RegistrySkillDetail";
+import { TargetPickerModal } from "./components/TargetPickerModal";
 import { formatAgentName, getAgentStatusMeta, isAgentDetected, type Agent } from "./agentStatus";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { getInitialLocale, getMessages, localizeErrorMessage, saveLocale, type Locale } from "./i18n";
+import type {
+  LocalSortMode,
+  ManagedSkillActionResponse,
+  RegistrySkill,
+  RegistrySkillDetail,
+  RegistrySkillsResponse,
+  RegistrySortMode,
+  SkillGroup,
+  SkillVariant,
+  TargetMode,
+} from "./types";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-interface SkillVariant {
-  id: string;
-  uid: string;
-  slug: string;
-  namespace: string;
-  treeHash: string;
-  conflictState: "none" | "diverged";
-  syncGroupId?: string | null;
-  metadata: { name: string; description: string; version?: string };
-  markdownBody: string;
-  installations: any[];
-}
-
-interface SkillGroup {
-  id: string;
-  slug: string;
-  displayName: string;
-  description: string;
-  installations: any[];
-  variants: SkillVariant[];
-  hasDiverged: boolean;
-}
-
-interface RegistrySkill {
-  slug: string;
-  displayName: string;
-  summary: string;
-  latestVersion?: string;
-  downloads: number;
-  stars: number;
-}
-
 interface TranslatorConfig {
-  apiKey: string;
-  model: string;
+  source: "siliconflow" | "openrouter";
+  siliconflowApiKey: string;
+  siliconflowModel: string;
+  openrouterApiKey: string;
+  openrouterModel: string;
 }
+
+type TranslatorConfigPayload = Partial<Omit<TranslatorConfig, "source">> & {
+  source?: string;
+  apiKey?: string;
+  model?: string;
+};
+
+const SILICONFLOW_DEFAULT_MODEL = "Qwen/Qwen3.5-4B";
+const OPENROUTER_DEFAULT_MODEL = "stepfun/step-3.5-flash:free";
+
+const getTranslatorSource = (source?: string): TranslatorConfig["source"] =>
+  source === "openrouter" ? "openrouter" : "siliconflow";
+
+const normalizeTranslatorConfig = (raw?: TranslatorConfigPayload): TranslatorConfig => {
+  const source = getTranslatorSource(raw?.source);
+  const siliconflowApiKey =
+    raw?.siliconflowApiKey ?? (source === "siliconflow" ? (raw?.apiKey ?? "") : "");
+  const openrouterApiKey =
+    raw?.openrouterApiKey ?? (source === "openrouter" ? (raw?.apiKey ?? "") : "");
+  const siliconflowModel = raw?.siliconflowModel
+    ?? (source === "siliconflow" ? raw?.model : undefined)
+    ?? SILICONFLOW_DEFAULT_MODEL;
+  const openrouterModel = raw?.openrouterModel
+    ?? (source === "openrouter" ? raw?.model : undefined)
+    ?? OPENROUTER_DEFAULT_MODEL;
+
+  return {
+    source,
+    siliconflowApiKey,
+    siliconflowModel,
+    openrouterApiKey,
+    openrouterModel,
+  };
+}
+
+const managedOperationNotice = (
+  response: ManagedSkillActionResponse,
+  t: ReturnType<typeof getMessages>
+) => {
+  const parts: string[] = [];
+  if (response.updatedSource) {
+    parts.push(t.updateDownloaded(response.sourceVersionLabel));
+  } else if (response.alreadyLatest) {
+    parts.push(t.updateAlreadyLatest(response.sourceVersionLabel));
+  }
+  parts.push(t.targetOperationSummary(response.results.length, response.skipped.length));
+  return parts.join(" · ");
+};
 
 function buildSkillGroups(variants: SkillVariant[]): SkillGroup[] {
   const groups = new Map<string, SkillGroup>();
@@ -109,12 +141,20 @@ export default function App() {
   const [view, setView] = useState<"skills" | "registry" | "settings">("skills");
   const [registrySkills, setRegistrySkills] = useState<RegistrySkill[]>([]);
   const [registryLoading, setRegistryLoading] = useState(false);
+  const [registryLoadingMore, setRegistryLoadingMore] = useState(false);
   const [registrySearch, setRegistrySearch] = useState("");
+  const [registrySort, setRegistrySort] = useState<RegistrySortMode>("updated");
+  const [registryNextCursor, setRegistryNextCursor] = useState<string | null>(null);
   const [registryError, setRegistryError] = useState<string | null>(null);
-  const [translatorConfig, setTranslatorConfig] = useState<TranslatorConfig>({
-    apiKey: "",
-    model: "Qwen/Qwen3.5-4B",
-  });
+  const [registryDetail, setRegistryDetail] = useState<RegistrySkillDetail | null>(null);
+  const [registryTransitioningToLocal, setRegistryTransitioningToLocal] = useState(false);
+  const [registryDetailLoadingSlug, setRegistryDetailLoadingSlug] = useState<string | null>(null);
+  const [registryInstallingSlug, setRegistryInstallingSlug] = useState<string | null>(null);
+  const [skillsSearch, setSkillsSearch] = useState("");
+  const [skillsSort, setSkillsSort] = useState<LocalSortMode>("name");
+  const [translatorConfig, setTranslatorConfig] = useState<TranslatorConfig>(() =>
+    normalizeTranslatorConfig()
+  );
   const [translatorSaving, setTranslatorSaving] = useState(false);
   const [translatorTesting, setTranslatorTesting] = useState(false);
   const [translatorNotice, setTranslatorNotice] = useState<string | null>(null);
@@ -122,6 +162,12 @@ export default function App() {
   const [translatorLogs, setTranslatorLogs] = useState("");
   const [translatorLogsLoading, setTranslatorLogsLoading] = useState(false);
   const [locale, setLocale] = useState<Locale>(() => getInitialLocale());
+  const [targetPicker, setTargetPicker] = useState<null | {
+    title: string;
+    description: string;
+    confirmLabel: string;
+    onConfirm: (selection: { targetMode: TargetMode; targetAgentType?: string }) => Promise<void>;
+  }>(null);
   const t = getMessages(locale);
   const skills = useMemo(() => buildSkillGroups(variants), [variants]);
   const agentAccessibleSkillCounts = useMemo(() => {
@@ -152,22 +198,20 @@ export default function App() {
     return Math.max(agent.skillCount, accessible);
   };
 
-  const refreshData = () => {
-    Promise.all([
+  const refreshData = async () => {
+    const [agentsRes, skillsRes] = await Promise.all([
       invoke("get_agents"),
       invoke("get_skills_v2")
-    ]).then(([agentsRes, skillsRes]: [any, any]) => {
-      setAgents(agentsRes);
-      const nextVariants = skillsRes as SkillVariant[];
-      setVariants(nextVariants);
-      setLoading(false);
-      
-      // Update selected skill if open to show new installation status
-      if (selectedSkill) {
-        const updated = buildSkillGroups(nextVariants).find(s => s.slug === selectedSkill.slug);
-        if (updated) setSelectedSkill(updated);
-      }
-    });
+    ]) as [any, any];
+    setAgents(agentsRes);
+    const nextVariants = skillsRes as SkillVariant[];
+    setVariants(nextVariants);
+    setLoading(false);
+
+    if (selectedSkill) {
+      const updated = buildSkillGroups(nextVariants).find(s => s.slug === selectedSkill.slug);
+      if (updated) setSelectedSkill(updated);
+    }
   };
 
   useEffect(() => {
@@ -181,8 +225,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    invoke<TranslatorConfig>("get_translator_config")
-      .then((config) => setTranslatorConfig(config))
+    invoke<TranslatorConfigPayload>("get_translator_config")
+      .then((config) => setTranslatorConfig(normalizeTranslatorConfig(config)))
       .catch(() => {
         // Keep default empty config.
       });
@@ -210,32 +254,82 @@ export default function App() {
     }
   }, [view]);
 
-  const loadRegistry = async () => {
-    setRegistryLoading(true);
+  const loadRegistry = async ({
+    append = false,
+    cursor = null,
+    query = registrySearch,
+    sort = registrySort,
+  }: {
+    append?: boolean;
+    cursor?: string | null;
+    query?: string;
+    sort?: RegistrySortMode;
+  } = {}) => {
+    if (append) {
+      setRegistryLoadingMore(true);
+    } else {
+      setRegistryLoading(true);
+    }
     setRegistryError(null);
     try {
-      const res = await invoke("browse_registry") as RegistrySkill[];
-      setRegistrySkills(res);
-    } catch (e: any) {
-      setRegistryError(e?.toString() ?? t.loadingRegistryFallback);
+      const res = await invoke<RegistrySkillsResponse>("get_registry_skills", {
+        request: {
+          query: query.trim() || null,
+          sort,
+          cursor,
+          limit: 24,
+        },
+      });
+      setRegistrySkills((previous) => (append ? [...previous, ...res.items] : res.items));
+      setRegistryNextCursor(res.nextCursor ?? null);
+    } catch (err) {
+      setRegistryError(localizeErrorMessage(err, locale));
     } finally {
-      setRegistryLoading(false);
+      if (append) {
+        setRegistryLoadingMore(false);
+      } else {
+        setRegistryLoading(false);
+      }
     }
   };
 
-  const searchRegistry = async (query: string) => {
-    setRegistryLoading(true);
-    setRegistryError(null);
+  const openRegistryDetail = async (slug: string) => {
+    setRegistryDetailLoadingSlug(slug);
     try {
-      const res = query.trim()
-        ? await invoke("search_registry", { query }) as RegistrySkill[]
-        : await invoke("browse_registry") as RegistrySkill[];
-      setRegistrySkills(res);
-    } catch (e: any) {
-      setRegistryError(e?.toString() ?? t.searchFailedFallback);
+      const detail = await invoke<RegistrySkillDetail>("get_registry_skill_detail", { slug });
+      setRegistryDetail(detail);
+    } catch (err) {
+      alert(`${t.operationFailedPrefix}: ${localizeErrorMessage(err, locale)}`);
     } finally {
-      setRegistryLoading(false);
+      setRegistryDetailLoadingSlug(null);
     }
+  };
+
+  const openInstallTargetPicker = (skill: RegistrySkill | RegistrySkillDetail) => {
+    setTargetPicker({
+      title: t.installSkillToTargets,
+      description: `${skill.displayName} · ${skill.latestVersion ? `v${skill.latestVersion}` : t.latestVersionUnknown}`,
+      confirmLabel: t.install,
+      onConfirm: async ({ targetMode, targetAgentType }) => {
+        setRegistryInstallingSlug(skill.slug);
+        try {
+          const response = await invoke<ManagedSkillActionResponse>("install_registry_skill", {
+            request: {
+              slug: skill.slug,
+              versionOrTag: skill.latestVersion ?? null,
+              targetMode,
+              targetAgentType: targetAgentType ?? null,
+            },
+          });
+          alert(managedOperationNotice(response, t));
+          await refreshData();
+        } catch (err) {
+          alert(`${t.operationFailedPrefix}: ${localizeErrorMessage(err, locale)}`);
+        } finally {
+          setRegistryInstallingSlug(null);
+        }
+      },
+    });
   };
 
   const saveTranslatorConfig = async () => {
@@ -267,8 +361,20 @@ export default function App() {
     }
   };
 
+  const activeTranslatorApiKey = translatorConfig.source === "openrouter"
+    ? translatorConfig.openrouterApiKey
+    : translatorConfig.siliconflowApiKey;
+  const activeTranslatorModel = translatorConfig.source === "openrouter"
+    ? translatorConfig.openrouterModel
+    : translatorConfig.siliconflowModel;
+  const activeTranslatorNoteBody = translatorConfig.source === "openrouter"
+    ? t.translatorNoteBodyOpenRouter
+    : t.translatorNoteBodySiliconFlow;
+
   const openTranslatorGuide = async () => {
-    const guideUrl = "https://cloud.siliconflow.cn/i/wRp8aT8o";
+    const guideUrl = translatorConfig.source === "openrouter"
+      ? "https://openrouter.ai/docs/quickstart"
+      : "https://cloud.siliconflow.cn/i/wRp8aT8o";
     try {
       await open(guideUrl);
     } catch {
@@ -286,9 +392,38 @@ export default function App() {
     }
   };
 
-  const filteredSkills = selectedAgent 
-    ? skills.filter(s => s.installations.some(i => i.agentType === selectedAgent))
-    : skills;
+  const openTranslatorLogFile = async () => {
+    if (!translatorLogPath) {
+      return;
+    }
+    try {
+      await invoke("open_local_path", { path: translatorLogPath });
+    } catch (err) {
+      setTranslatorNotice(`${t.operationFailedPrefix}: ${localizeErrorMessage(err, locale)}`);
+    }
+  };
+
+  const normalizedSkillsSearch = skillsSearch.trim().toLowerCase();
+  const filteredSkills = skills
+    .filter((skill) => (selectedAgent ? skill.installations.some((i) => i.agentType === selectedAgent) : true))
+    .filter((skill) => {
+      if (!normalizedSkillsSearch) return true;
+      const haystacks = [
+        skill.displayName,
+        skill.slug,
+        skill.description,
+        ...skill.variants.map((variant) => variant.metadata.description || ""),
+      ];
+      return haystacks.some((value) => value.toLowerCase().includes(normalizedSkillsSearch));
+    })
+    .sort((left, right) => {
+      if (skillsSort === "modified") {
+        const leftModified = Math.max(...left.variants.map((variant) => variant.modifiedAt ?? 0), 0);
+        const rightModified = Math.max(...right.variants.map((variant) => variant.modifiedAt ?? 0), 0);
+        return rightModified - leftModified || left.displayName.localeCompare(right.displayName);
+      }
+      return left.displayName.toLowerCase().localeCompare(right.displayName.toLowerCase());
+    });
   const pageTitle = view === "registry"
     ? t.browseRegistry
     : view === "settings"
@@ -298,13 +433,26 @@ export default function App() {
         : t.allSkills;
   const showClaudeInitBanner = !loading && variants.length === 0;
 
+  const openLocalSkillFromRegistry = (slug: string) => {
+    const localSkill = skills.find((skill) => skill.slug === slug);
+    if (!localSkill) return;
+    setView("skills");
+    setSelectedAgent(null);
+    setSelectedSkill(localSkill);
+    setRegistryTransitioningToLocal(true);
+    window.setTimeout(() => {
+      setRegistryDetail(null);
+      setRegistryTransitioningToLocal(false);
+    }, 180);
+  };
+
   return (
     <div className="flex h-screen bg-[#FDFDFF] overflow-hidden">
       {/* Sidebar */}
       <div className="w-72 bg-[#F1F1F6]/80 backdrop-blur-xl border-r border-slate-200/50 flex flex-col">
         <div className="p-6 flex items-center space-x-3">
           <div className="bg-indigo-600 p-2 rounded-xl">
-            <Hammer className="w-6 h-6 text-white" />
+            <Wrench className="w-6 h-6 text-white" />
           </div>
           <div>
             <h1 className="text-lg font-bold text-slate-900 leading-tight">{t.appName}</h1>
@@ -329,7 +477,12 @@ export default function App() {
               <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full">{skills.length}</span>
             </button>
             <button
-              onClick={() => { setView("registry"); setSelectedAgent(null); loadRegistry(); }}
+              onClick={() => {
+                setView("registry");
+                setSelectedAgent(null);
+                setRegistryDetail(null);
+                loadRegistry({ query: registrySearch, sort: registrySort });
+              }}
               className={cn(
                 "w-full mt-1 flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-all duration-200",
                 view === "registry" ? "bg-white shadow-sm text-indigo-600 font-semibold" : "text-slate-500 hover:bg-slate-200/50"
@@ -440,22 +593,61 @@ export default function App() {
               </button>
             </div>
             {view === "registry" ? (
-              <div className="flex items-center space-x-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200">
-                <Search className="w-3.5 h-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder={t.registrySearchPlaceholder}
-                  value={registrySearch}
-                  onChange={(e) => setRegistrySearch(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") searchRegistry(registrySearch); }}
-                  className="bg-transparent text-xs text-slate-600 outline-none w-40 placeholder:text-slate-400"
-                />
-              </div>
+              <>
+                <div className="flex items-center space-x-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5">
+                  <Search className="w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder={t.registrySearchPlaceholder}
+                    value={registrySearch}
+                    onChange={(e) => setRegistrySearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        loadRegistry({ query: registrySearch, sort: registrySort });
+                      }
+                    }}
+                    className="w-40 bg-transparent text-xs text-slate-600 outline-none placeholder:text-slate-400"
+                  />
+                </div>
+                <select
+                  value={registrySort}
+                  onChange={(e) => {
+                    const nextSort = e.target.value as RegistrySortMode;
+                    setRegistrySort(nextSort);
+                    loadRegistry({ query: registrySearch, sort: nextSort });
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 outline-none"
+                >
+                  <option value="updated">{t.sortUpdated}</option>
+                  <option value="downloads">{t.sortDownloads}</option>
+                  <option value="name">{t.sortName}</option>
+                </select>
+              </>
             ) : view === "settings" ? null : (
-              <div className="flex items-center space-x-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600">
-                <Activity className="w-3.5 h-3.5 text-green-500" />
-                <span>{t.totalCount(filteredSkills.length)}</span>
-              </div>
+              <>
+                <div className="flex items-center space-x-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5">
+                  <Search className="w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder={t.localSearchPlaceholder}
+                    value={skillsSearch}
+                    onChange={(e) => setSkillsSearch(e.target.value)}
+                    className="w-40 bg-transparent text-xs text-slate-600 outline-none placeholder:text-slate-400"
+                  />
+                </div>
+                <select
+                  value={skillsSort}
+                  onChange={(e) => setSkillsSort(e.target.value as LocalSortMode)}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 outline-none"
+                >
+                  <option value="name">{t.sortName}</option>
+                  <option value="modified">{t.sortModified}</option>
+                </select>
+                <div className="flex items-center space-x-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                  <Activity className="w-3.5 h-3.5 text-green-500" />
+                  <span>{t.totalCount(filteredSkills.length)}</span>
+                </div>
+              </>
             )}
           </div>
         </header>
@@ -468,36 +660,54 @@ export default function App() {
               <div className="bg-white rounded-2xl border border-slate-200/60 p-6">
                 <h3 className="font-semibold text-slate-800 text-sm mb-2">{t.translatorSettingsTitle}</h3>
                 <p className="text-xs text-slate-500 mb-4">{t.translatorSettingsDescription}</p>
+                <div className="mb-4 inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+                  <button
+                    onClick={() => {
+                      setTranslatorConfig((prev) => ({ ...prev, source: "siliconflow" }));
+                    }}
+                    className={cn(
+                      "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                      translatorConfig.source === "siliconflow"
+                        ? "bg-white text-indigo-700 shadow-sm"
+                        : "text-slate-600 hover:text-slate-800"
+                    )}
+                  >
+                    {t.translatorSourceSiliconFlow}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setTranslatorConfig((prev) => ({ ...prev, source: "openrouter" }));
+                    }}
+                    className={cn(
+                      "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                      translatorConfig.source === "openrouter"
+                        ? "bg-white text-indigo-700 shadow-sm"
+                        : "text-slate-600 hover:text-slate-800"
+                    )}
+                  >
+                    {t.translatorSourceOpenRouter}
+                  </button>
+                </div>
                 <div className="space-y-3">
                   <div>
                     <label className="text-xs text-slate-500 mb-1 block">{t.translatorKeyLabel}</label>
                     <input
                       type="password"
-                      value={translatorConfig.apiKey}
-                      onChange={(e) =>
-                        setTranslatorConfig((prev) => ({ ...prev, apiKey: e.target.value }))
-                      }
+                      value={activeTranslatorApiKey}
+                      onChange={(e) => {
+                        const nextApiKey = e.target.value;
+                        setTranslatorConfig((prev) => prev.source === "openrouter"
+                          ? { ...prev, openrouterApiKey: nextApiKey }
+                          : { ...prev, siliconflowApiKey: nextApiKey }
+                        );
+                      }}
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
                     />
                   </div>
-                  <div>
-                    <label className="text-xs text-slate-500 mb-1 block">{t.translatorModelLabel}</label>
-                    <select
-                      value={translatorConfig.model}
-                      onChange={(e) =>
-                        setTranslatorConfig((prev) => ({ ...prev, model: e.target.value }))
-                      }
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
-                    >
-                      <option value="Qwen/Qwen3.5-4B">Qwen/Qwen3.5-4B</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-slate-500 mb-1 block">{t.translatorBaseUrlLabel}</label>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 font-mono">
-                      https://api.siliconflow.cn/v1
-                    </div>
-                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    {t.translatorDefaultModelLabel}:{" "}
+                    <span className="font-mono text-slate-700">{activeTranslatorModel}</span>
+                  </p>
                 </div>
                 <div className="mt-4 flex items-center gap-2">
                   <button
@@ -520,7 +730,7 @@ export default function App() {
                 )}
                 <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/70 p-3">
                   <p className="text-xs font-semibold text-blue-800">{t.translatorNoteTitle}</p>
-                  <p className="mt-1 text-xs text-blue-700">{t.translatorNoteBody}</p>
+                  <p className="mt-1 text-xs text-blue-700">{activeTranslatorNoteBody}</p>
                   <button
                     onClick={openTranslatorGuide}
                     className="mt-2 text-xs text-blue-700 underline hover:text-blue-800"
@@ -542,7 +752,9 @@ export default function App() {
                       {translatorLogsLoading ? t.loadingLogs : t.refreshLogs}
                     </button>
                     <button
-                      onClick={() => translatorLogPath && open(translatorLogPath)}
+                      onClick={() => {
+                        void openTranslatorLogFile();
+                      }}
                       disabled={!translatorLogPath}
                       className="px-3 py-1.5 bg-blue-50 text-blue-700 text-xs rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -648,25 +860,71 @@ export default function App() {
                 </div>
                 <h3 className="text-lg font-semibold text-slate-800">{t.failedToLoadRegistry}</h3>
                 <p className="text-slate-500 max-w-sm mt-2">{localizeErrorMessage(registryError, locale)}</p>
-                <button onClick={loadRegistry} className="mt-4 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition-colors">
+                <button
+                  onClick={() => loadRegistry({ query: registrySearch, sort: registrySort })}
+                  className="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white transition-colors hover:bg-indigo-700"
+                >
                   {t.retry}
                 </button>
               </div>
             ) : registrySkills.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {registrySkills.map(rs => (
-                  <div key={rs.slug} className="bg-white rounded-2xl border border-slate-200/60 p-5 hover:shadow-md hover:border-indigo-200 transition-all cursor-pointer">
-                    <h3 className="font-semibold text-slate-800 text-sm mb-1">{rs.displayName}</h3>
-                    <p className="text-xs text-slate-500 line-clamp-2 mb-3">{rs.summary}</p>
-                    <div className="flex items-center justify-between text-[10px] text-slate-400">
-                      <div className="flex items-center space-x-3">
-                        <span className="flex items-center space-x-1"><Download className="w-3 h-3" /><span>{rs.downloads}</span></span>
-                        <span className="flex items-center space-x-1"><Star className="w-3 h-3" /><span>{rs.stars}</span></span>
+              <div>
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {registrySkills.map((rs) => (
+                    <div
+                      key={rs.slug}
+                      onClick={() => openRegistryDetail(rs.slug)}
+                      className="cursor-pointer rounded-2xl border border-slate-200/60 bg-white p-5 transition-all hover:border-indigo-200 hover:shadow-md"
+                    >
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-800">{rs.displayName}</h3>
+                          <p className="mt-1 line-clamp-2 text-xs text-slate-500">{rs.summary}</p>
+                        </div>
+                        {registryDetailLoadingSlug === rs.slug && (
+                          <span className="text-[10px] font-semibold text-indigo-500">{t.loading}</span>
+                        )}
                       </div>
-                      {rs.latestVersion && <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">v{rs.latestVersion}</span>}
+                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                        <div className="flex items-center space-x-3">
+                          <span className="flex items-center space-x-1"><Download className="w-3 h-3" /><span>{rs.downloads}</span></span>
+                          <span className="flex items-center space-x-1"><Star className="w-3 h-3" /><span>{rs.stars}</span></span>
+                        </div>
+                        {rs.latestVersion && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">v{rs.latestVersion}</span>}
+                      </div>
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openInstallTargetPicker(rs);
+                          }}
+                          disabled={registryInstallingSlug === rs.slug}
+                          className="rounded-full bg-indigo-50 px-3 py-1.5 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {registryInstallingSlug === rs.slug ? t.working : t.install}
+                        </button>
+                      </div>
                     </div>
+                  ))}
+                </div>
+                {registryNextCursor && (
+                  <div className="mt-6 flex justify-center">
+                    <button
+                      onClick={() =>
+                        loadRegistry({
+                          append: true,
+                          cursor: registryNextCursor,
+                          query: registrySearch,
+                          sort: registrySort,
+                        })
+                      }
+                      disabled={registryLoadingMore}
+                      className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {registryLoadingMore ? t.loadingMore : t.loadMore}
+                    </button>
                   </div>
-                ))}
+                )}
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-center py-20">
@@ -707,6 +965,7 @@ export default function App() {
           skillGroup={selectedSkill} 
           agents={agents} 
           locale={locale}
+          layerClassName={registryDetail ? "z-[70]" : "z-50"}
           onClose={() => setSelectedSkill(null)} 
           onRefresh={refreshData}
           onOpenTranslatorSettings={() => {
@@ -716,6 +975,36 @@ export default function App() {
           onOpenTranslatorGuide={openTranslatorGuide}
         />
       )}
+      {registryDetail && (
+        <RegistrySkillDetailPanel
+          agents={agents}
+          detail={registryDetail}
+          installing={registryInstallingSlug === registryDetail.slug}
+          isTransitioningToLocal={registryTransitioningToLocal}
+          localSkill={skills.find((skill) => skill.slug === registryDetail.slug) ?? null}
+          locale={locale}
+          onClose={() => setRegistryDetail(null)}
+          onInstall={() => openInstallTargetPicker(registryDetail)}
+          onOpenLocalSkill={() => openLocalSkillFromRegistry(registryDetail.slug)}
+          onOpenTranslatorSettings={() => {
+            setView("settings");
+            setSelectedAgent(null);
+          }}
+          onOpenTranslatorGuide={openTranslatorGuide}
+        />
+      )}
+      {targetPicker && (
+        <TargetPickerModal
+          agents={agents}
+          confirmLabel={targetPicker.confirmLabel}
+          description={targetPicker.description}
+          locale={locale}
+          onClose={() => setTargetPicker(null)}
+          onConfirm={targetPicker.onConfirm}
+          title={targetPicker.title}
+        />
+      )}
     </div>
   );
 }
+

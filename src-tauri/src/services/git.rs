@@ -15,7 +15,7 @@ pub struct DiscoveredSkill {
 
 pub fn clone_repo(url: &str, shallow: bool) -> Result<PathBuf, String> {
     let temp_dir = tempfile::Builder::new()
-        .prefix("skillsLocalManager-")
+        .prefix("SkillLocalManager-")
         .tempdir()
         .map_err(|e| e.to_string())?;
 

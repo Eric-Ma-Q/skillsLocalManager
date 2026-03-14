@@ -1,7 +1,7 @@
 [package]
 name = "skills-local-manager"
-version = "0.1.2"
-description = "skillsLocalManager - Tauri Desktop App"
+version = "0.1.3"
+description = "SkillLocalManager - Tauri Desktop App"
 edition = "2021"
 
 [build-dependencies]
@@ -28,6 +28,7 @@ uuid = { version = "1.0", features = ["v4"] }
 tempfile = "3.10"
 window-vibrancy = "0.5"
 sha2 = "0.10"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [lib]
 name = "skills_local_manager_lib"

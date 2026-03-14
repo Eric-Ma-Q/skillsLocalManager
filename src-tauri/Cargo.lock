@@ -4008,7 +4008,7 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
 name = "skills-local-manager"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-openai",
  "dirs 5.0.1",
@@ -4030,6 +4030,7 @@ dependencies = [
  "walkdir",
  "which",
  "window-vibrancy 0.5.3",
+ "zip",
 ]
 
 [[package]]
@@ -6251,6 +6252,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "zip"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "760394e246e4c28189f19d488c058bf16f564016aefac5d32bb1f3b51d5e9261"
+dependencies = [
+ "byteorder",
+ "crc32fast",
+ "crossbeam-utils",
+ "flate2",
 ]
 
 [[package]]

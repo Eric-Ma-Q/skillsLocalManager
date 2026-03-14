@@ -25,7 +25,7 @@ pub fn create_link(source: &Path, target: &Path) -> Result<(), String> {
 }
 
 pub fn remove_link(path: &Path) -> Result<(), String> {
-    if !path.exists() {
+    if path.symlink_metadata().is_err() {
         return Ok(());
     }
 

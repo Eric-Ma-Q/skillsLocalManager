@@ -3,3 +3,7 @@ frontend/node_modules/
 frontend/dist/
 src-tauri/target/
 *.log
+.release-upload/
+.tmp-skilllocalmanager-src.tgz
+docs/macos-release-troubleshooting.md
+docs/macos-release-sop.md

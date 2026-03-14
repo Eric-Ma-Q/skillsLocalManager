@@ -8,31 +8,12 @@ import { listen } from "@tauri-apps/api/event";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { formatAgentName, getAgentStatusMeta, type Agent } from "../agentStatus";
+import { TargetPickerModal } from "./TargetPickerModal";
 import { getMessages, localizeErrorMessage, type Locale } from "../i18n";
+import type { ManagedSkillActionResponse, SkillGroup, SkillVariant, TargetMode } from "../types";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
-}
-
-interface SkillVariant {
-  id: string;
-  uid: string;
-  slug: string;
-  namespace: string;
-  treeHash: string;
-  metadata: { name: string; description: string; version?: string };
-  markdownBody: string;
-  installations: any[];
-}
-
-interface SkillGroup {
-  id: string;
-  slug: string;
-  displayName: string;
-  description: string;
-  installations: any[];
-  variants: SkillVariant[];
-  hasDiverged: boolean;
 }
 
 const PROMPT_SECTION_REGEX =
@@ -195,10 +176,25 @@ interface SkillCoverHistoryEntry {
   rolledBackAt?: number | null;
 }
 
+const summarizeManagedAction = (
+  response: ManagedSkillActionResponse,
+  t: ReturnType<typeof getMessages>
+) => {
+  const parts: string[] = [];
+  if (response.updatedSource) {
+    parts.push(t.updateDownloaded(response.sourceVersionLabel));
+  } else if (response.alreadyLatest) {
+    parts.push(t.updateAlreadyLatest(response.sourceVersionLabel));
+  }
+  parts.push(t.targetOperationSummary(response.results.length, response.skipped.length));
+  return parts.join(" · ");
+};
+
 export const SkillDetail = ({
   skillGroup,
   agents,
   locale,
+  layerClassName = "z-50",
   onClose,
   onRefresh,
   onOpenTranslatorSettings,
@@ -207,6 +203,7 @@ export const SkillDetail = ({
   skillGroup: SkillGroup;
   agents: Agent[];
   locale: Locale;
+  layerClassName?: string;
   onClose: () => void;
   onRefresh: () => void;
   onOpenTranslatorSettings: () => void;
@@ -228,6 +225,8 @@ export const SkillDetail = ({
   const [historyEntries, setHistoryEntries] = useState<SkillCoverHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [rollingBackEntryId, setRollingBackEntryId] = useState<string | null>(null);
+  const [updateTargetModalOpen, setUpdateTargetModalOpen] = useState(false);
+  const [updatingManagedSkill, setUpdatingManagedSkill] = useState(false);
   const activeSessionRef = useRef<string | null>(null);
   const streamTextRef = useRef<string>("");
   const t = getMessages(locale);
@@ -264,6 +263,9 @@ export const SkillDetail = ({
     }
     return selectedVariant.namespace.replace("agent:", "");
   }, [selectedVariant?.namespace]);
+  const selectedOriginType = selectedVariant?.originType ?? "local-manual";
+  const selectedRemoteVersion = selectedVariant?.remoteVersionLabel || selectedVariant?.managedSource?.remoteVersionLabel;
+  const canManagedUpdate = selectedOriginType !== "local-manual";
 
   useEffect(() => {
     setTranslatedPrompt(null);
@@ -278,6 +280,8 @@ export const SkillDetail = ({
     setHistoryEntries([]);
     setHistoryLoading(false);
     setRollingBackEntryId(null);
+    setUpdateTargetModalOpen(false);
+    setUpdatingManagedSkill(false);
     activeSessionRef.current = null;
     streamTextRef.current = "";
   }, [selectedVariant?.uid]);
@@ -396,6 +400,37 @@ export const SkillDetail = ({
     }
   };
 
+  const triggerManagedUpdate = async (selection: {
+    targetMode: TargetMode;
+    targetAgentType?: string;
+  }) => {
+    if (!selectedVariant) return;
+    if (!canManagedUpdate) {
+      alert(t.updateUnavailableLocal);
+      return;
+    }
+
+    setUpdatingManagedSkill(true);
+    try {
+      const response = await invoke<ManagedSkillActionResponse>("update_managed_skill", {
+        request: {
+          sourceUid: selectedVariant.uid,
+          targetMode: selection.targetMode,
+          targetAgentType: selection.targetAgentType ?? null,
+        },
+      });
+      alert(summarizeManagedAction(response, t));
+      onRefresh();
+      if (historyAgentType) {
+        await loadHistory(historyAgentType);
+      }
+    } catch (err) {
+      alert(`${t.operationFailedPrefix}: ${localizeErrorMessage(err, locale)}`);
+    } finally {
+      setUpdatingManagedSkill(false);
+    }
+  };
+
   const loadHistory = async (agentType: string) => {
     setHistoryAgentType(agentType);
     setHistoryLoading(true);
@@ -481,7 +516,7 @@ export const SkillDetail = ({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-in fade-in duration-200">
+    <div className={cn("fixed inset-0 flex animate-in fade-in duration-200", layerClassName)}>
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose} />
       <div className="relative ml-auto w-full max-w-6xl bg-white shadow-2xl flex flex-col h-full animate-in slide-in-from-right duration-300">
         <header className="h-16 flex items-center justify-between px-8 border-b border-slate-100 bg-white/80 backdrop-blur-md sticky top-0 z-10">
@@ -497,8 +532,18 @@ export const SkillDetail = ({
             >
               {coveringAll ? t.coveringToAll : t.coverToAllAvailable}
             </button>
-            <button className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200">
-              {t.updateSkill}
+            <button
+              onClick={() => {
+                if (!canManagedUpdate) {
+                  alert(t.updateUnavailableLocal);
+                  return;
+                }
+                setUpdateTargetModalOpen(true);
+              }}
+              disabled={updatingManagedSkill}
+              className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-70 disabled:cursor-wait"
+            >
+              {updatingManagedSkill ? t.working : t.updateSkill}
             </button>
             <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
               <X className="w-5 h-5 text-slate-400" />
@@ -518,6 +563,14 @@ export const SkillDetail = ({
                 <p className="text-lg text-slate-500 leading-relaxed">
                   {selectedVariant.metadata.description || skillGroup.description}
                 </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{selectedVariant.originLabel}</span>
+                  {selectedRemoteVersion && (
+                    <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-indigo-700">
+                      {t.remoteVersionLabel}: {selectedRemoteVersion}
+                    </span>
+                  )}
+                </div>
                 <div className="mt-3 text-xs font-semibold uppercase tracking-wide">
                   {allSameContent ? (
                     <span className="text-emerald-600">{t.sameVersionAcrossTerminals}</span>
@@ -802,6 +855,17 @@ export const SkillDetail = ({
             </div>
           </div>
         </div>
+      )}
+      {updateTargetModalOpen && (
+        <TargetPickerModal
+          agents={agents}
+          confirmLabel={t.updateSkill}
+          description={`${skillGroup.displayName || skillGroup.slug} · ${selectedRemoteVersion || t.latestVersionUnknown}`}
+          locale={locale}
+          onClose={() => setUpdateTargetModalOpen(false)}
+          onConfirm={triggerManagedUpdate}
+          title={t.updateSkillTargets}
+        />
       )}
     </div>
   );

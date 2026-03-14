@@ -173,6 +173,27 @@ pub enum SkillConflictState {
     Diverged,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkillOriginType {
+    LocalManual,
+    ClawhubManaged,
+    ClaudeBootstrapManaged,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedSkillSource {
+    pub provider: SkillOriginType,
+    pub remote_slug: String,
+    pub source_repo: Option<String>,
+    pub source_ref: Option<String>,
+    pub installed_version_label: Option<String>,
+    pub remote_version_label: Option<String>,
+    pub registry_url: Option<String>,
+    pub last_synced_at: Option<u64>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillMetadata {
@@ -227,7 +248,13 @@ pub struct Skill {
     pub sync_group_id: Option<String>,
     pub installations: Vec<SkillInstallation>,
     pub lock_entry: Option<LockEntry>,
+    pub origin_type: SkillOriginType,
+    pub origin_label: String,
+    pub origin_slug: Option<String>,
+    pub managed_source: Option<ManagedSkillSource>,
+    pub modified_at: Option<u64>,
     pub has_update: bool,
+    pub remote_version_label: Option<String>,
     pub remote_tree_hash: Option<String>,
     pub remote_commit_hash: Option<String>,
     pub local_commit_hash: Option<String>,
@@ -290,6 +317,104 @@ pub struct ClaudeBootstrapResult {
     pub skipped: Vec<ClaudeBootstrapSkippedSkill>,
     pub source_repo: String,
     pub source_ref: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetMode {
+    AllAvailable,
+    SingleAgent,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RegistrySortMode {
+    Updated,
+    Downloads,
+    Name,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySkillsRequest {
+    pub query: Option<String>,
+    pub sort: Option<RegistrySortMode>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySkillsResponse<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryOwner {
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySkillDetail {
+    pub slug: String,
+    pub display_name: String,
+    pub summary: String,
+    pub markdown_body: String,
+    pub latest_version: Option<String>,
+    pub downloads: i32,
+    pub stars: i32,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
+    pub owner: Option<RegistryOwner>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySkillInstallRequest {
+    pub slug: String,
+    pub version_or_tag: Option<String>,
+    pub target_mode: TargetMode,
+    pub target_agent_type: Option<AgentType>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedSkillUpdateRequest {
+    pub source_uid: String,
+    pub target_mode: TargetMode,
+    pub target_agent_type: Option<AgentType>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ManagedTargetAction {
+    Linked,
+    Relinked,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedTargetResult {
+    pub target_agent_type: AgentType,
+    pub target_path: String,
+    pub action: ManagedTargetAction,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedSkillActionResponse {
+    pub source_uid: String,
+    pub source_slug: String,
+    pub source_version_label: String,
+    pub remote_version_label: Option<String>,
+    pub updated_source: bool,
+    pub already_latest: bool,
+    pub results: Vec<ManagedTargetResult>,
+    pub skipped: Vec<CoverSkippedTarget>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

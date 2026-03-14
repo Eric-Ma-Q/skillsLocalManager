@@ -10,15 +10,43 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::lookup_host;
 
+const TRANSLATOR_SOURCE_SILICONFLOW: &str = "siliconflow";
+const TRANSLATOR_SOURCE_OPENROUTER: &str = "openrouter";
 const SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.cn/v1";
-const DEFAULT_MODEL: &str = "Qwen/Qwen3.5-4B";
+const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const SILICONFLOW_DNS_HOST: &str = "api.siliconflow.cn";
+const OPENROUTER_DNS_HOST: &str = "openrouter.ai";
+const SILICONFLOW_DEFAULT_MODEL: &str = "Qwen/Qwen3.5-4B";
+const OPENROUTER_DEFAULT_MODEL: &str = "stepfun/step-3.5-flash:free";
 const TRANSLATOR_SYSTEM_PROMPT: &str = "You are a professional bilingual translator for Chinese and English.\nTask:\n1) Detect whether the source text is primarily Chinese or English.\n2) If source is primarily English, translate to Simplified Chinese.\n3) If source is primarily Chinese, translate to English.\n4) Preserve meaning, tone, and all markdown structure (headings, lists, links, tables, and code blocks).\n5) Keep technical terms, file paths, URLs, commands, and code identifiers accurate.\n6) Perform an internal self-check for completeness and fidelity before finalizing.\nOutput rules:\n- Output only the final translated text.\n- Do not output analysis, notes, explanations, or labels like \"Translation\" or \"翻译内容\".\n- Do not wrap the whole answer in code fences unless the source itself is entirely a code block.\n- Keep markdown spacing compact: use at most one blank line between paragraphs or sections.";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslatorConfig {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub siliconflow_api_key: String,
+    #[serde(default)]
+    pub siliconflow_model: String,
+    #[serde(default)]
+    pub openrouter_api_key: String,
+    #[serde(default)]
+    pub openrouter_model: String,
+    // Legacy fields kept for backward compatibility with old config shape.
+    #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
     pub model: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedTranslatorConfig {
+    source: String,
+    api_key: String,
+    model: String,
+    base_url: &'static str,
+    dns_host: &'static str,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -224,31 +252,127 @@ fn save_app_config(config: &AppConfigFile) -> Result<(), String> {
     fs::write(&path, serialized).map_err(|e| format!("Failed to write translator config: {}", e))
 }
 
-fn normalize_model(model: &str) -> String {
-    if model.trim().is_empty() {
-        DEFAULT_MODEL.to_string()
+fn normalize_source(source: &str) -> String {
+    if source.trim().eq_ignore_ascii_case(TRANSLATOR_SOURCE_OPENROUTER) {
+        TRANSLATOR_SOURCE_OPENROUTER.to_string()
     } else {
-        model.trim().to_string()
+        TRANSLATOR_SOURCE_SILICONFLOW.to_string()
     }
 }
 
-fn resolve_config() -> Result<TranslatorConfig, String> {
+fn normalize_model_for_source(source: &str, model: &str) -> String {
+    let trimmed = model.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    if source == TRANSLATOR_SOURCE_OPENROUTER {
+        OPENROUTER_DEFAULT_MODEL.to_string()
+    } else {
+        SILICONFLOW_DEFAULT_MODEL.to_string()
+    }
+}
+
+fn source_base_url(source: &str) -> &'static str {
+    if source == TRANSLATOR_SOURCE_OPENROUTER {
+        OPENROUTER_BASE_URL
+    } else {
+        SILICONFLOW_BASE_URL
+    }
+}
+
+fn source_dns_host(source: &str) -> &'static str {
+    if source == TRANSLATOR_SOURCE_OPENROUTER {
+        OPENROUTER_DNS_HOST
+    } else {
+        SILICONFLOW_DNS_HOST
+    }
+}
+
+fn source_missing_key_code(source: &str) -> &'static str {
+    if source == TRANSLATOR_SOURCE_OPENROUTER {
+        "OPENROUTER_API_KEY"
+    } else {
+        "SILICONFLOW_API_KEY"
+    }
+}
+
+fn sanitize_config(config: &TranslatorConfig) -> TranslatorConfig {
+    let source = normalize_source(&config.source);
+
+    let mut siliconflow_api_key = config.siliconflow_api_key.trim().to_string();
+    if siliconflow_api_key.is_empty() && source == TRANSLATOR_SOURCE_SILICONFLOW {
+        siliconflow_api_key = config.api_key.trim().to_string();
+    }
+
+    let mut openrouter_api_key = config.openrouter_api_key.trim().to_string();
+    if openrouter_api_key.is_empty() && source == TRANSLATOR_SOURCE_OPENROUTER {
+        openrouter_api_key = config.api_key.trim().to_string();
+    }
+
+    let mut siliconflow_model = config.siliconflow_model.trim().to_string();
+    if siliconflow_model.is_empty() && source == TRANSLATOR_SOURCE_SILICONFLOW {
+        siliconflow_model = config.model.trim().to_string();
+    }
+    siliconflow_model = normalize_model_for_source(TRANSLATOR_SOURCE_SILICONFLOW, &siliconflow_model);
+
+    let mut openrouter_model = config.openrouter_model.trim().to_string();
+    if openrouter_model.is_empty() && source == TRANSLATOR_SOURCE_OPENROUTER {
+        openrouter_model = config.model.trim().to_string();
+    }
+    openrouter_model = normalize_model_for_source(TRANSLATOR_SOURCE_OPENROUTER, &openrouter_model);
+
+    let (api_key, model) = if source == TRANSLATOR_SOURCE_OPENROUTER {
+        (openrouter_api_key.clone(), openrouter_model.clone())
+    } else {
+        (siliconflow_api_key.clone(), siliconflow_model.clone())
+    };
+
+    TranslatorConfig {
+        source,
+        siliconflow_api_key,
+        siliconflow_model,
+        openrouter_api_key,
+        openrouter_model,
+        api_key,
+        model,
+    }
+}
+
+fn resolve_config() -> Result<ResolvedTranslatorConfig, String> {
     let config = get_translator_config().unwrap_or_default();
-    if config.api_key.trim().is_empty() {
+    let source = normalize_source(&config.source);
+    let (api_key, model) = if source == TRANSLATOR_SOURCE_OPENROUTER {
+        (config.openrouter_api_key.trim(), config.openrouter_model.trim())
+    } else {
+        (
+            config.siliconflow_api_key.trim(),
+            config.siliconflow_model.trim(),
+        )
+    };
+
+    if api_key.is_empty() {
         append_log(
             "ERROR",
-            "resolve_config failed: missing SiliconFlow API key",
+            &format!("resolve_config failed: missing {} key", source),
         );
-        return Err("TRANSLATOR_CONFIG_MISSING: SILICONFLOW_API_KEY".to_string());
+        return Err(format!(
+            "TRANSLATOR_CONFIG_MISSING: {}",
+            source_missing_key_code(&source)
+        ));
     }
-    let resolved = TranslatorConfig {
-        api_key: config.api_key.trim().to_string(),
-        model: normalize_model(&config.model),
+
+    let resolved = ResolvedTranslatorConfig {
+        source: source.clone(),
+        api_key: api_key.to_string(),
+        model: normalize_model_for_source(&source, model),
+        base_url: source_base_url(&source),
+        dns_host: source_dns_host(&source),
     };
     append_log(
         "INFO",
         &format!(
-            "resolve_config ok: model={}, api_key_len={}",
+            "resolve_config ok: source={}, model={}, api_key_len={}",
+            resolved.source,
             resolved.model,
             resolved.api_key.len()
         ),
@@ -282,11 +406,10 @@ fn extract_delta_content(value: &Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn build_request_payload(text: &str, model: &str, stream: bool) -> Value {
-    json!({
-        "model": model,
+fn build_request_payload(text: &str, config: &ResolvedTranslatorConfig, stream: bool) -> Value {
+    let mut payload = json!({
+        "model": config.model,
         "stream": stream,
-        "enable_thinking": false,
         "temperature": 0.2,
         "messages": [
             {
@@ -298,12 +421,16 @@ fn build_request_payload(text: &str, model: &str, stream: bool) -> Value {
                 "content": text
             }
         ]
-    })
+    });
+    if config.source == TRANSLATOR_SOURCE_SILICONFLOW {
+        payload["enable_thinking"] = Value::Bool(false);
+    }
+    payload
 }
 
-fn build_client(config: &TranslatorConfig) -> Result<Client<OpenAIConfig>, String> {
+fn build_client(config: &ResolvedTranslatorConfig) -> Result<Client<OpenAIConfig>, String> {
     let http_client = reqwest::Client::builder()
-        .user_agent("skillsLocalManager-Multiplatform")
+        .user_agent("SkillLocalManager-Multiplatform")
         .http1_only()
         .connect_timeout(Duration::from_secs(12))
         .timeout(Duration::from_secs(90))
@@ -315,17 +442,17 @@ fn build_client(config: &TranslatorConfig) -> Result<Client<OpenAIConfig>, Strin
 
     let openai_config = OpenAIConfig::new()
         .with_api_key(config.api_key.clone())
-        .with_api_base(SILICONFLOW_BASE_URL);
+        .with_api_base(config.base_url);
 
     Ok(Client::with_config(openai_config).with_http_client(http_client))
 }
 
-async fn log_request_context(stream: bool, model: &str, text_len: usize) {
+async fn log_request_context(stream: bool, config: &ResolvedTranslatorConfig, text_len: usize) {
     append_log(
         "INFO",
         &format!(
-            "request start: stream={}, model={}, text_len={}",
-            stream, model, text_len
+            "request start: source={}, stream={}, model={}, base_url={}, text_len={}",
+            config.source, stream, config.model, config.base_url, text_len
         ),
     );
     append_log(
@@ -338,14 +465,14 @@ async fn log_request_context(stream: bool, model: &str, text_len: usize) {
             env_hint("NO_PROXY")
         ),
     );
-    match lookup_host(("api.siliconflow.cn", 443)).await {
+    match lookup_host((config.dns_host, 443)).await {
         Ok(addrs) => {
             let mut ips: Vec<String> = addrs.map(|a| a.ip().to_string()).collect();
             ips.sort();
             ips.dedup();
             append_log(
                 "INFO",
-                &format!("dns resolved api.siliconflow.cn => {:?}", ips),
+                &format!("dns resolved {} => {:?}", config.dns_host, ips),
             );
         }
         Err(e) => append_log("WARN", &format!("dns lookup failed: {}", e)),
@@ -354,17 +481,11 @@ async fn log_request_context(stream: bool, model: &str, text_len: usize) {
 
 pub fn get_translator_config() -> Result<TranslatorConfig, String> {
     let config = load_app_config()?;
-    Ok(TranslatorConfig {
-        api_key: config.translator.api_key,
-        model: normalize_model(&config.translator.model),
-    })
+    Ok(sanitize_config(&config.translator))
 }
 
 pub fn set_translator_config(config: TranslatorConfig) -> Result<(), String> {
-    let sanitized = TranslatorConfig {
-        api_key: config.api_key.trim().to_string(),
-        model: normalize_model(&config.model),
-    };
+    let sanitized = sanitize_config(&config);
 
     let mut app_config = load_app_config().unwrap_or_default();
     app_config.translator = sanitized;
@@ -374,9 +495,9 @@ pub fn set_translator_config(config: TranslatorConfig) -> Result<(), String> {
 pub async fn test_connection() -> Result<String, String> {
     append_log("INFO", "test_connection start");
     let config = resolve_config()?;
-    log_request_context(false, &config.model, 22).await;
+    log_request_context(false, &config, 22).await;
     let client = build_client(&config)?;
-    let payload = build_request_payload("Reply with exactly: OK", &config.model, false);
+    let payload = build_request_payload("Reply with exactly: OK", &config, false);
 
     let response: Value = client.chat().create_byot(payload).await.map_err(|e| {
         let details = describe_openai_error(&e);
@@ -400,9 +521,12 @@ pub async fn test_connection() -> Result<String, String> {
 
     append_log(
         "INFO",
-        &format!("test_connection success: model={}", config.model),
+        &format!(
+            "test_connection success: source={}, model={}",
+            config.source, config.model
+        ),
     );
-    Ok(format!("Connected ({})", config.model))
+    Ok(format!("Connected ({}, {})", config.source, config.model))
 }
 
 pub async fn translate_text_to_zh(text: &str) -> Result<String, String> {
@@ -416,9 +540,9 @@ pub async fn translate_text_to_zh(text: &str) -> Result<String, String> {
     }
 
     let config = resolve_config()?;
-    log_request_context(false, &config.model, text.len()).await;
+    log_request_context(false, &config, text.len()).await;
     let client = build_client(&config)?;
-    let payload = build_request_payload(text, &config.model, false);
+    let payload = build_request_payload(text, &config, false);
 
     let response: Value = client.chat().create_byot(payload).await.map_err(|e| {
         let details = describe_openai_error(&e);
@@ -462,9 +586,9 @@ where
     }
 
     let config = resolve_config()?;
-    log_request_context(true, &config.model, text.len()).await;
+    log_request_context(true, &config, text.len()).await;
     let client = build_client(&config)?;
-    let payload = build_request_payload(text, &config.model, true);
+    let payload = build_request_payload(text, &config, true);
 
     let mut stream = client
         .chat()

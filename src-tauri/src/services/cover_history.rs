@@ -605,7 +605,7 @@ pub fn rollback_skill_cover_entry(entry_id: String) -> Result<RollbackSkillCover
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{SkillConflictState, SkillMetadata, SkillScope};
+    use crate::models::{SkillConflictState, SkillMetadata, SkillOriginType, SkillScope};
     use tempfile::tempdir;
 
     fn write_skill(path: &Path, marker: &str) -> Result<(), String> {
@@ -637,7 +637,13 @@ mod tests {
             sync_group_id: None,
             installations: Vec::new(),
             lock_entry: None,
+            origin_type: SkillOriginType::LocalManual,
+            origin_label: "Local".to_string(),
+            origin_slug: None,
+            managed_source: None,
+            modified_at: None,
             has_update: false,
+            remote_version_label: None,
             remote_tree_hash: None,
             remote_commit_hash: None,
             local_commit_hash: None,

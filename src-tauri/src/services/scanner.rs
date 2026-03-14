@@ -1,4 +1,6 @@
-use crate::models::{AgentType, Skill, SkillConflictState, SkillMetadata, SkillScope};
+use crate::models::{
+    AgentType, Skill, SkillConflictState, SkillMetadata, SkillOriginType, SkillScope,
+};
 use crate::services::{md_parser, symlink, tree_hash};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -139,7 +141,13 @@ fn parse_skill_directory(path: &Path, scope: SkillScope, namespace: &str) -> Opt
         sync_group_id: None,
         installations,
         lock_entry: None,
+        origin_type: SkillOriginType::LocalManual,
+        origin_label: "Local".to_string(),
+        origin_slug: None,
+        managed_source: None,
+        modified_at: None,
         has_update: false,
+        remote_version_label: None,
         remote_tree_hash: None,
         remote_commit_hash: None,
         local_commit_hash: None,

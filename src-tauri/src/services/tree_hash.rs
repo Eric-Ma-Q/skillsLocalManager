@@ -4,7 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
 
-const NOISE_FILES: [&str; 3] = [".DS_Store", "Thumbs.db", "desktop.ini"];
+const NOISE_FILES: [&str; 4] = [
+    ".DS_Store",
+    "Thumbs.db",
+    "desktop.ini",
+    ".skilldeck-source.json",
+];
 const NOISE_DIRS: [&str; 2] = [".git", ".skilldeck-sync-snapshots"];
 
 fn is_noise_file(name: &str) -> bool {

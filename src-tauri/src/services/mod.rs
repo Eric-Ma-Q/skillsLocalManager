@@ -3,6 +3,7 @@ pub mod claude_bootstrap;
 pub mod clawhub;
 pub mod cover_history;
 pub mod git;
+pub mod managed_skills;
 pub mod md_parser;
 pub mod scanner;
 pub mod symlink;

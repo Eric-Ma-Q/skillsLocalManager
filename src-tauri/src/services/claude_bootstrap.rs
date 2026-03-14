@@ -2,15 +2,15 @@ use crate::models::{
     AgentType, ClaudeBootstrapCatalog, ClaudeBootstrapRequest, ClaudeBootstrapResult,
     ClaudeBootstrapSkill, ClaudeBootstrapSkippedSkill,
 };
-use crate::services::git;
+use crate::services::{git, managed_skills};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use which::which;
 
-const ANTHROPIC_SKILLS_REPO_URL: &str = "https://github.com/anthropics/skills.git";
-const ANTHROPIC_SKILLS_REPO_REF: &str = "main";
+pub const ANTHROPIC_SKILLS_REPO_URL: &str = "https://github.com/anthropics/skills.git";
+pub const ANTHROPIC_SKILLS_REPO_REF: &str = "main";
 
 fn bootstrap_skills() -> Vec<ClaudeBootstrapSkill> {
     vec![
@@ -42,8 +42,7 @@ fn bootstrap_skills() -> Vec<ClaudeBootstrapSkill> {
         ClaudeBootstrapSkill {
             slug: "claude-api".to_string(),
             name: "Claude API".to_string(),
-            description: "Build applications with the Claude API and Anthropic SDKs."
-                .to_string(),
+            description: "Build applications with the Claude API and Anthropic SDKs.".to_string(),
             recommended: true,
         },
         ClaudeBootstrapSkill {
@@ -71,6 +70,24 @@ fn bootstrap_skills() -> Vec<ClaudeBootstrapSkill> {
             recommended: false,
         },
     ]
+}
+
+pub fn bootstrap_source_repo() -> &'static str {
+    "anthropics/skills"
+}
+
+pub fn bootstrap_source_ref() -> &'static str {
+    ANTHROPIC_SKILLS_REPO_REF
+}
+
+pub fn bootstrap_repo_url() -> &'static str {
+    ANTHROPIC_SKILLS_REPO_URL
+}
+
+pub fn is_bootstrap_slug(slug: &str) -> bool {
+    bootstrap_skills()
+        .into_iter()
+        .any(|skill| skill.slug == slug)
 }
 
 fn target_dir() -> Result<PathBuf, String> {
@@ -138,7 +155,10 @@ fn validate_request_skills(skill_slugs: &[String]) -> Result<Vec<String>, String
         return Err("CLAUDE_BOOTSTRAP_NO_SKILLS_SELECTED".to_string());
     }
 
-    let allowed: HashSet<String> = bootstrap_skills().into_iter().map(|skill| skill.slug).collect();
+    let allowed: HashSet<String> = bootstrap_skills()
+        .into_iter()
+        .map(|skill| skill.slug)
+        .collect();
     let mut deduped = Vec::new();
     let mut seen = HashSet::new();
 
@@ -190,10 +210,7 @@ fn install_skill_to_target(
 ) -> Result<Option<ClaudeBootstrapSkippedSkill>, String> {
     let source_dir = repo_root.join("skills").join(slug);
     if !source_dir.exists() || !source_dir.join("SKILL.md").exists() {
-        return Err(format!(
-            "CLAUDE_BOOTSTRAP_SOURCE_SKILL_MISSING: {}",
-            slug
-        ));
+        return Err(format!("CLAUDE_BOOTSTRAP_SOURCE_SKILL_MISSING: {}", slug));
     }
 
     let final_target = target_dir.join(slug);
@@ -214,6 +231,11 @@ fn install_skill_to_target(
         let _ = fs::remove_dir_all(&staging);
         e.to_string()
     })?;
+    let version_label = git::scan_skills_in_repo(repo_root)
+        .into_iter()
+        .find(|skill| skill.id == slug)
+        .and_then(|skill| skill.metadata.version);
+    managed_skills::write_bootstrap_metadata(&final_target, slug, version_label)?;
 
     Ok(None)
 }
@@ -233,9 +255,8 @@ fn install_bootstrap_skills_impl(
         if !path_is_creatable(target_dir) {
             return Err("CLAUDE_BOOTSTRAP_TARGET_DIR_NOT_CREATABLE".to_string());
         }
-        fs::create_dir_all(target_dir).map_err(|e| {
-            format!("CLAUDE_BOOTSTRAP_TARGET_DIR_CREATE_FAILED: {}", e)
-        })?;
+        fs::create_dir_all(target_dir)
+            .map_err(|e| format!("CLAUDE_BOOTSTRAP_TARGET_DIR_CREATE_FAILED: {}", e))?;
         created_target_dir = true;
     }
 
@@ -356,7 +377,11 @@ mod tests {
         .expect("install result");
 
         assert_eq!(result.installed, vec!["skill-creator".to_string()]);
-        assert!(target.path().join("skill-creator").join("SKILL.md").exists());
+        assert!(target
+            .path()
+            .join("skill-creator")
+            .join("SKILL.md")
+            .exists());
     }
 
     #[test]

@@ -1,8 +1,8 @@
-# skillsLocalManager
+# SkillLocalManager
 
-![skillsLocalManager Logo](./image/logo.png)
+![SkillLocalManager Logo](./image/logo.png)
 
-`skillsLocalManager` 是一个面向本地 AI Agent / CLI 生态的桌面端技能管理器。它用统一界面扫描本机技能目录、查看不同 Agent 的安装状态，并支持安装、移除、覆盖同步、回滚、Registry 浏览和 Prompt 翻译，适合维护多套技能库的个人开发者与团队成员。
+`SkillLocalManager` 是一个面向本地 AI Agent / CLI 生态的桌面端技能管理器。它用统一界面扫描本机技能目录、查看不同 Agent 的安装状态，并支持安装、移除、覆盖同步、回滚、Registry 浏览和 Prompt 翻译，适合维护多套技能库的个人开发者与团队成员。
 
 ## 项目简介
 
